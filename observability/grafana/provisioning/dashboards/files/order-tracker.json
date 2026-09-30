@@ -1,0 +1,29 @@
+{
+  "id": null,
+  "uid": "order-tracker-requests",
+  "title": "Order Tracker Requests",
+  "tags": ["order-tracker", "opentelemetry"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": {"from": "now-15m", "to": "now"},
+  "panels": [
+    {
+      "id": 1,
+      "title": "Request count by route",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 0},
+      "targets": [{"expr": "sum by (route) (increase(order_lookup_requests_total[5m]))", "legendFormat": "{{route}}", "refId": "A"}]
+    },
+    {
+      "id": 2,
+      "title": "Request errors by route and status",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 0},
+      "targets": [{"expr": "sum by (route, http_response_status_code) (increase(order_lookup_requests_total{http_response_status_code=~\"4..|5..\"}[5m]))", "legendFormat": "{{route}} · {{http_response_status_code}}", "refId": "A"}]
+    }
+  ]
+}

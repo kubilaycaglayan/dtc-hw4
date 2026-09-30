@@ -8,10 +8,41 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from opentelemetry import metrics, trace
+from opentelemetry._logs import set_logger_provider
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+import logging
 
 
 DB_PATH = Path(os.getenv("ORDER_DB_PATH", "data/orders.db"))
 STATUSES = {"received", "preparing", "shipped", "delivered"}
+
+resource = Resource.create({"service.name": "order-tracker"})
+trace_provider = TracerProvider(resource=resource)
+trace_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+trace.set_tracer_provider(trace_provider)
+tracer = trace.get_tracer(__name__)
+
+metric_reader = PeriodicExportingMetricReader(OTLPMetricExporter(), export_interval_millis=5000)
+metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=[metric_reader]))
+order_lookup_requests = metrics.get_meter(__name__).create_counter(
+    "order_lookup_requests", description="Order lookup requests", unit="{request}"
+)
+
+logger_provider = LoggerProvider(resource=resource)
+logger_provider.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter()))
+set_logger_provider(logger_provider)
+logging.getLogger().addHandler(LoggingHandler(level=logging.INFO, logger_provider=logger_provider))
+logger = logging.getLogger(__name__)
 
 
 def connect():
@@ -55,7 +86,7 @@ def order_detail(row):
     order = as_dict(row)
     if order["priority"] == "express":
         placed_at = datetime.fromisoformat(order["created_at"])
-        estimated_at = placed_at.replace(day=placed_at.day + 2)
+        estimated_at = placed_at + timedelta(days=2)
         order["estimated_delivery"] = estimated_at.date().isoformat()
     return order
 
@@ -100,11 +131,38 @@ def list_orders():
 
 @app.get("/api/orders/{order_id}")
 def get_order(order_id: str):
-    with connect() as db:
-        row = db.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
-    if row is None:
-        raise HTTPException(404, "Order not found")
-    return order_detail(row)
+    with tracer.start_as_current_span("order.lookup") as span:
+        span.set_attribute("order.id", order_id)
+        with connect() as db:
+            row = db.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
+        if row is None:
+            span.set_attribute("http.response.status_code", 404)
+            logger.warning("Order lookup failed", extra={"order.id": order_id, "http.response.status_code": 404})
+            raise HTTPException(404, "Order not found")
+        span.set_attribute("http.response.status_code", 200)
+        logger.info("Order lookup succeeded", extra={"order.id": order_id, "http.response.status_code": 200})
+        return order_detail(row)
+
+
+@app.middleware("http")
+async def record_order_lookup_metric(request, call_next):
+    route_name = request.url.path
+    status_code = 500
+    try:
+        response = await call_next(request)
+        route = request.scope.get("route")
+        route_name = getattr(route, "path", route_name)
+        status_code = response.status_code
+        return response
+    finally:
+        if route_name.startswith("/api/orders/"):
+            matched_route = request.scope.get("route")
+            route_name = getattr(matched_route, "path", route_name)
+            if route_name == "/api/orders/{order_id}":
+                order_lookup_requests.add(
+                    1,
+                    {"route": route_name, "http.response.status_code": status_code},
+                )
 
 
 @app.post("/api/orders", status_code=201)

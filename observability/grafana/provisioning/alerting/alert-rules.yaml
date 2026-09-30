@@ -1,0 +1,67 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: order-tracker-5xx
+    folder: Order Tracker
+    interval: 10s
+    rules:
+      - uid: order-tracker-5xx
+        title: Order Tracker 5xx responses
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              datasource:
+                type: prometheus
+                uid: prometheus
+              expr: sum(increase(order_lookup_requests_total{http_response_status_code=~"5.."}[5m])) or vector(0)
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+              type: prometheus
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                name: Expression
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: B
+              type: threshold
+        noDataState: OK
+        execErrState: Error
+        for: 1m
+        annotations:
+          summary: Order API returned 5xx responses
+          description: >-
+            More than zero 5xx responses were recorded for GET
+            /api/orders/{order_id} during the last 5 minutes.
+          endpoint: GET /api/orders/{order_id}
+          time_window: 5m
+          dashboard_url: http://localhost:3003/d/order-tracker-requests/order-tracker-requests?orgId=1
+        labels:
+          severity: warning
+        isPaused: false
+        dashboardUid: order-tracker-requests
+        panelId: 2

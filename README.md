@@ -20,6 +20,12 @@ If port 8000 is occupied, set `ORDER_TRACKER_PORT`, for example:
 ORDER_TRACKER_PORT=18080 docker compose up --build -d --wait
 ```
 
+## Observability stack
+
+The app sends OpenTelemetry metrics, logs, and traces to the Collector over OTLP. The Collector exports metrics for Prometheus, logs for Loki, and traces for Tempo. Grafana provisions all three data sources and an **Order Tracker Requests** dashboard with request counts and errors.
+
+Open Grafana at <http://127.0.0.1:3003> (local login: `admin` / `admin`). The UI uses host port 3003 because 3000 is commonly occupied; Prometheus, Loki, and Tempo are available to Grafana over the Compose network. Collector, backend, and Grafana provisioning files are in `observability/`.
+
 Run tests with `uv run --frozen pytest -q`. Stop the app with `docker compose down`. Add `-v` only if you also want to delete the order data.
 
 ## API
